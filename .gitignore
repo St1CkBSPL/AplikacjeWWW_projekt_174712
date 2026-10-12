@@ -1,0 +1,21 @@
+# Środowisko wirtualne
+.venv/
+env/
+venv/
+
+# Pliki Pythona i cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Baza danych deweloperska (nie commitujemy bazy SQLite!)
+*.sqlite3
+*.db
+
+# Pliki środowiskowe z kluczami
+.env
+
+# Pliki konfiguracyjne IDE
+.idea/
+.vscode/
+*.swp
