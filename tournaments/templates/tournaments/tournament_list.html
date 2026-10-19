@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+
+{% block title %}Turnieje | Dart Tournament Hub{% endblock %}
+
+{% block extra_head %}
+<style>
+    .page-heading {
+        margin-bottom: 2rem;
+    }
+
+    .page-heading h1 {
+        margin: 0 0 .5rem;
+        font-size: clamp(2rem, 5vw, 3.5rem);
+    }
+
+    .page-heading p, .empty-state {
+        color: var(--muted);
+    }
+
+    .tournament-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 290px), 1fr));
+        gap: 1rem;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+    }
+
+    .tournament-card {
+        height: 100%;
+        padding: 1.5rem;
+        border: 1px solid var(--border);
+        border-radius: .75rem;
+        background: var(--surface);
+    }
+
+    .tournament-card h2 {
+        margin: 0 0 .75rem;
+        font-size: 1.3rem;
+    }
+
+    .tournament-card dl {
+        display: grid;
+        grid-template-columns: max-content 1fr;
+        gap: .4rem 1rem;
+        margin: 0;
+    }
+
+    .tournament-card dt { color: var(--muted); }
+    .tournament-card dd { margin: 0; }
+
+    .status {
+        display: inline-block;
+        margin-bottom: 1rem;
+        padding: .2rem .6rem;
+        border-radius: 999px;
+        color: #082413;
+        background: var(--accent);
+        font-size: .8rem;
+        font-weight: 700;
+    }
+
+    .status--inactive {
+        color: var(--text);
+        background: #59635d;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<section aria-labelledby="tournaments-heading">
+    <header class="page-heading">
+        <h1 id="tournaments-heading">Turnieje darta</h1>
+        <p>Nadchodzące i zakończone rozgrywki.</p>
+    </header>
+
+    {% if tournaments %}
+        <ul class="tournament-grid">
+            {% for tournament in tournaments %}
+                <li>
+                    <article class="tournament-card">
+                        <span class="status{% if not tournament.is_active %} status--inactive{% endif %}">
+                            {% if tournament.is_active %}Aktywny{% else %}Nieaktywny{% endif %}
+                        </span>
+                        <h2>{{ tournament.name }}</h2>
+                        <dl>
+                            <dt>Start</dt>
+                            <dd>{{ tournament.start_date|date:"d.m.Y, H:i" }}</dd>
+                            <dt>Organizator</dt>
+                            <dd>{{ tournament.organizer.get_full_name|default:tournament.organizer.username }}</dd>
+                            <dt>Uczestnicy</dt>
+                            <dd>{{ tournament.participants_count }} / {{ tournament.max_participants }}</dd>
+                        </dl>
+                    </article>
+                </li>
+            {% endfor %}
+        </ul>
+    {% else %}
+        <p class="empty-state">Nie dodano jeszcze żadnych turniejów.</p>
+    {% endif %}
+</section>
+{% endblock %}
