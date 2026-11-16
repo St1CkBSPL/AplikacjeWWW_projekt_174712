@@ -102,6 +102,45 @@ class ParticipantSerializer(serializers.ModelSerializer):
         return obj.seed == 1
 
 
+class TournamentListSerializer(serializers.ModelSerializer):
+    """Lekki serializator listy turniejów (bez pełnego opisu)."""
+
+    organizer_username = serializers.ReadOnlyField(source="organizer.username")
+    venue_name = serializers.ReadOnlyField(source="venue.name")
+    is_free = serializers.SerializerMethodField()
+    short_description = serializers.SerializerMethodField()
+    tags_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Tournament
+        fields = [
+            "id",
+            "name",
+            "slug",
+            "venue_name",
+            "organizer_username",
+            "start_date",
+            "entry_fee",
+            "is_online",
+            "is_active",
+            "is_free",
+            "short_description",
+            "tags_count",
+        ]
+
+    def get_is_free(self, obj) -> bool:
+        return obj.entry_fee == 0
+
+    def get_short_description(self, obj) -> str:
+        description = obj.description or ""
+        if len(description) > 80:
+            return f"{description[:80]}..."
+        return description
+
+    def get_tags_count(self, obj) -> int:
+        return obj.tags.count()
+
+
 class TournamentModelSerializer(serializers.ModelSerializer):
     organizer_username = serializers.ReadOnlyField(source="organizer.username")
     venue_name = serializers.ReadOnlyField(source="venue.name")
