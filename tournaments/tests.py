@@ -8,7 +8,7 @@ from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from .models import Match, Participant, Tag, Tournament, Venue
+from .models import Match, OrganizerProfile, Participant, Tag, Ticket, Tournament, Venue
 
 
 class TournamentListViewTests(TestCase):
@@ -56,12 +56,12 @@ class TournamentViewSetAPITests(TestCase):
         self.tag = Tag.objects.create(name="501", slug="501")
         self.second_tag = Tag.objects.create(name="Double Out", slug="double-out")
         self.list_url = reverse("tournaments:tournament-list")
+        self.api.force_authenticate(user=self.organizer)
 
     def _valid_payload(self, **overrides):
         payload = {
             "name": "Miejski Turniej Darta",
             "slug": "miejski-turniej-darta",
-            "organizer": self.organizer.id,
             "venue": self.venue.id,
             "tag_ids": [self.tag.id],
             "description": (
@@ -81,7 +81,14 @@ class TournamentViewSetAPITests(TestCase):
         response = self.api.get("/api/v1/")
 
         self.assertEqual(response.status_code, 200)
-        for resource in ("venues", "tags", "tournaments", "participants", "matches"):
+        for resource in (
+            "venues",
+            "tags",
+            "tournaments",
+            "participants",
+            "matches",
+            "tickets",
+        ):
             self.assertIn(resource, response.data)
 
     def test_create_tournament_returns_nested_tags_and_computed_fields(self):
@@ -382,6 +389,7 @@ class MatchViewSetAPITests(TestCase):
             seed=2,
         )
         self.list_url = reverse("tournaments:match-list")
+        self.api.force_authenticate(user=self.organizer)
 
     def _valid_payload(self, **overrides):
         payload = {
@@ -474,3 +482,226 @@ class MatchViewSetAPITests(TestCase):
 
         self.assertEqual(response.status_code, 204)
         self.assertFalse(Match.objects.filter(pk=dart_match.pk).exists())
+
+
+class JWTAuthAndUserResourcesTests(TestCase):
+    def setUp(self):
+        self.api = APIClient()
+        self.register_url = reverse("tournaments:api-register")
+        self.me_url = reverse("tournaments:api-me")
+        self.token_url = reverse("token_obtain_pair")
+        self.refresh_url = reverse("token_refresh")
+        self.verify_url = reverse("token_verify")
+        self.tournaments_url = reverse("tournaments:tournament-list")
+        self.tickets_url = reverse("tournaments:ticket-list")
+        self.venue = Venue.objects.create(
+            name="Dart Hall",
+            city="Olsztyn",
+            capacity=64,
+        )
+
+    def _register_and_login(self, username, email, company_name="Dart Club"):
+        reg_resp = self.api.post(
+            self.register_url,
+            {
+                "username": username,
+                "email": email,
+                "first_name": "Jan",
+                "last_name": "Kowalski",
+                "password": "StrongPassword123!",
+                "password_confirm": "StrongPassword123!",
+                "company_name": company_name,
+            },
+            format="json",
+        )
+        self.assertEqual(reg_resp.status_code, 201)
+
+        token_resp = self.api.post(
+            self.token_url,
+            {"username": username, "password": "StrongPassword123!"},
+            format="json",
+        )
+        self.assertEqual(token_resp.status_code, 200)
+        return token_resp.data
+
+    def test_registration_creates_user_and_organizer_profile(self):
+        tokens = self._register_and_login("dart_org", "org@example.com", "Olsztyn Darts")
+        self.assertIn("access", tokens)
+        self.assertIn("refresh", tokens)
+
+        user = get_user_model().objects.get(username="dart_org")
+        self.assertTrue(OrganizerProfile.objects.filter(user=user).exists())
+        self.assertEqual(user.profile.company_name, "Olsztyn Darts")
+
+        verify_resp = self.api.post(
+            self.verify_url,
+            {"token": tokens["access"]},
+            format="json",
+        )
+        self.assertEqual(verify_resp.status_code, 200)
+
+        refresh_resp = self.api.post(
+            self.refresh_url,
+            {"refresh": tokens["refresh"]},
+            format="json",
+        )
+        self.assertEqual(refresh_resp.status_code, 200)
+        self.assertIn("access", refresh_resp.data)
+
+    def test_registration_validates_password_match_and_unique_email(self):
+        mismatch_resp = self.api.post(
+            self.register_url,
+            {
+                "username": "bad_user",
+                "email": "bad@example.com",
+                "password": "StrongPassword123!",
+                "password_confirm": "DifferentPassword123!",
+            },
+            format="json",
+        )
+        self.assertEqual(mismatch_resp.status_code, 400)
+        self.assertIn("password_confirm", mismatch_resp.data)
+
+        self._register_and_login("first_user", "dup@example.com")
+        dup_resp = self.api.post(
+            self.register_url,
+            {
+                "username": "second_user",
+                "email": "DUP@example.com",
+                "password": "StrongPassword123!",
+                "password_confirm": "StrongPassword123!",
+            },
+            format="json",
+        )
+        self.assertEqual(dup_resp.status_code, 400)
+        self.assertIn("email", dup_resp.data)
+
+    def test_jwt_create_tournament_assigns_organizer_from_token(self):
+        payload = {
+            "name": "Turniej JWT Open",
+            "slug": "turniej-jwt-open",
+            "venue": self.venue.id,
+            "description": "Turniej 501 tworzony przez użytkownika uwierzytelnionego tokenem JWT.",
+            "start_date": (timezone.now() + timedelta(days=10)).isoformat(),
+            "max_participants": 16,
+            "entry_fee": "20.00",
+            "is_online": False,
+            "is_active": True,
+        }
+
+        anon_resp = self.api.post(self.tournaments_url, payload, format="json")
+        self.assertEqual(anon_resp.status_code, 401)
+
+        tokens = self._register_and_login("jwt_creator", "creator@example.com")
+        self.api.credentials(HTTP_AUTHORIZATION=f"Bearer {tokens['access']}")
+
+        create_resp = self.api.post(self.tournaments_url, payload, format="json")
+        self.assertEqual(create_resp.status_code, 201)
+        self.assertEqual(create_resp.data["organizer_username"], "jwt_creator")
+
+    def test_current_user_me_endpoint_read_and_update(self):
+        anon_resp = self.api.get(self.me_url)
+        self.assertEqual(anon_resp.status_code, 401)
+
+        tokens = self._register_and_login("profile_user", "me@example.com", "Stary Klub")
+        self.api.credentials(HTTP_AUTHORIZATION=f"Bearer {tokens['access']}")
+
+        get_resp = self.api.get(self.me_url)
+        self.assertEqual(get_resp.status_code, 200)
+        self.assertEqual(get_resp.data["username"], "profile_user")
+        self.assertEqual(get_resp.data["profile"]["company_name"], "Stary Klub")
+        self.assertFalse(get_resp.data["profile"]["is_verified"])
+
+        patch_resp = self.api.patch(
+            self.me_url,
+            {
+                "first_name": "Kacper",
+                "profile": {
+                    "company_name": "Nowy Klub Darta",
+                    "bio": "Organizator ligi 501 w Olsztynie.",
+                    "website": "https://dart.example.com",
+                    "is_verified": True,
+                },
+            },
+            format="json",
+        )
+        self.assertEqual(patch_resp.status_code, 200)
+        self.assertEqual(patch_resp.data["first_name"], "Kacper")
+        self.assertEqual(patch_resp.data["profile"]["company_name"], "Nowy Klub Darta")
+        self.assertEqual(
+            patch_resp.data["profile"]["bio"],
+            "Organizator ligi 501 w Olsztynie.",
+        )
+        self.assertFalse(patch_resp.data["profile"]["is_verified"])
+
+    def test_ticket_purchase_validation_and_user_isolation(self):
+        tokens_a = self._register_and_login("player_a", "a@example.com")
+        tokens_b = self._register_and_login("player_b", "b@example.com")
+        owner = get_user_model().objects.get(username="player_a")
+
+        active_tournament = Tournament.objects.create(
+            name="Puchar Darta",
+            slug="puchar-darta",
+            organizer=owner,
+            venue=self.venue,
+            description="Aktywny turniej pucharowy 501 z biletami UUID.",
+            start_date=timezone.now() + timedelta(days=5),
+            max_participants=16,
+            is_active=True,
+        )
+        inactive_tournament = Tournament.objects.create(
+            name="Szkic Turnieju",
+            slug="szkic-turnieju",
+            organizer=owner,
+            venue=self.venue,
+            description="Nieaktywny szkic turnieju — brak sprzedaży biletów.",
+            start_date=timezone.now() + timedelta(days=8),
+            max_participants=16,
+            is_active=False,
+        )
+
+        # Anonimowy użytkownik nie ma dostępu do biletów
+        self.api.credentials()
+        self.assertEqual(self.api.get(self.tickets_url).status_code, 401)
+
+        # Gracz A kupuje bilet
+        self.api.credentials(HTTP_AUTHORIZATION=f"Bearer {tokens_a['access']}")
+        buy_resp = self.api.post(
+            self.tickets_url,
+            {"tournament": active_tournament.id},
+            format="json",
+        )
+        self.assertEqual(buy_resp.status_code, 201)
+        self.assertEqual(buy_resp.data["user_username"], "player_a")
+        self.assertTrue(buy_resp.data["ticket_code"])
+        ticket_id = buy_resp.data["id"]
+
+        # Drugi bilet na ten sam turniej jest blokowany
+        dup_resp = self.api.post(
+            self.tickets_url,
+            {"tournament": active_tournament.id},
+            format="json",
+        )
+        self.assertEqual(dup_resp.status_code, 400)
+        self.assertIn("tournament", dup_resp.data)
+
+        # Bilet na nieaktywny turniej jest blokowany
+        inactive_resp = self.api.post(
+            self.tickets_url,
+            {"tournament": inactive_tournament.id},
+            format="json",
+        )
+        self.assertEqual(inactive_resp.status_code, 400)
+        self.assertIn("tournament", inactive_resp.data)
+
+        # Gracz B widzi pustą listę i nie ma dostępu do biletu gracza A (izolacja)
+        self.api.credentials(HTTP_AUTHORIZATION=f"Bearer {tokens_b['access']}")
+        list_b = self.api.get(self.tickets_url)
+        self.assertEqual(list_b.status_code, 200)
+        self.assertEqual(len(list_b.data), 0)
+
+        detail_b = self.api.get(
+            reverse("tournaments:ticket-detail", args=[ticket_id])
+        )
+        self.assertEqual(detail_b.status_code, 404)
+        self.assertEqual(Ticket.objects.count(), 1)

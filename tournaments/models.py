@@ -1,3 +1,5 @@
+import uuid
+
 from django.db import models
 from django.contrib.auth.models import User
 from django.core.validators import MinValueValidator
@@ -167,3 +169,82 @@ class Match(models.Model):
 
     def __str__(self):
         return f"{self.player_home.nickname} vs {self.player_away.nickname}"
+
+
+class OrganizerProfile(models.Model):
+    user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        related_name="profile",
+        verbose_name="Użytkownik",
+    )
+    company_name = models.CharField(
+        max_length=150,
+        blank=True,
+        verbose_name="Nazwa firmy / organizacji",
+    )
+    bio = models.TextField(blank=True, verbose_name="O organizatorze")
+    website = models.URLField(blank=True, verbose_name="Strona WWW")
+    is_verified = models.BooleanField(
+        default=False,
+        verbose_name="Zweryfikowany organizator",
+    )
+
+    class Meta:
+        verbose_name = "Profil organizatora"
+        verbose_name_plural = "Profile organizatorów"
+
+    def __str__(self):
+        return f"Profil: {self.user.username} ({self.company_name or 'Osoba prywatna'})"
+
+
+class Ticket(models.Model):
+    STATUS_CHOICES = (
+        ("reserved", "Zarezerwowany"),
+        ("confirmed", "Opłacony i potwierdzony"),
+        ("used", "Wykorzystany na wejściu"),
+        ("cancelled", "Anulowany"),
+    )
+
+    ticket_code = models.UUIDField(
+        default=uuid.uuid4,
+        editable=False,
+        unique=True,
+        verbose_name="Unikalny kod biletu (UUID)",
+    )
+    tournament = models.ForeignKey(
+        Tournament,
+        on_delete=models.CASCADE,
+        related_name="tickets",
+        verbose_name="Turniej",
+    )
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="my_tickets",
+        verbose_name="Uczestnik",
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default="confirmed",
+        verbose_name="Status",
+    )
+    purchased_at = models.DateTimeField(
+        auto_now_add=True,
+        verbose_name="Data zakupu",
+    )
+
+    class Meta:
+        verbose_name = "Bilet"
+        verbose_name_plural = "Bilety"
+        ordering = ["-purchased_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tournament", "user"],
+                name="unique_tournament_user_ticket",
+            )
+        ]
+
+    def __str__(self):
+        return f"Bilet {self.ticket_code} -> {self.tournament.name} ({self.user.username})"

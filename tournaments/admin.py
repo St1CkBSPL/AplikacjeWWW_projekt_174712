@@ -1,6 +1,14 @@
 from django.contrib import admin
 
-from .models import Match, Participant, Tag, Tournament, Venue
+from .models import (
+    Match,
+    OrganizerProfile,
+    Participant,
+    Tag,
+    Ticket,
+    Tournament,
+    Venue,
+)
 
 
 @admin.register(Venue)
@@ -86,3 +94,18 @@ class MatchAdmin(admin.ModelAdmin):
         "player_away__nickname",
         "tournament__name",
     )
+
+
+@admin.register(OrganizerProfile)
+class OrganizerProfileAdmin(admin.ModelAdmin):
+    list_display = ("user", "company_name", "is_verified")
+    list_filter = ("is_verified",)
+    search_fields = ("user__username", "company_name")
+
+
+@admin.register(Ticket)
+class TicketAdmin(admin.ModelAdmin):
+    list_display = ("ticket_code", "tournament", "user", "status", "purchased_at")
+    list_filter = ("status", "tournament")
+    search_fields = ("ticket_code", "user__username", "tournament__name")
+    readonly_fields = ("ticket_code", "purchased_at")

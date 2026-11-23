@@ -5,13 +5,18 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
+from rest_framework.permissions import (
+    IsAuthenticated,
+    IsAuthenticatedOrReadOnly,
+)
 from rest_framework.response import Response
 
-from .models import Match, Participant, Tag, Tournament, Venue
+from .models import Match, Participant, Tag, Ticket, Tournament, Venue
 from .serializers import (
     MatchSerializer,
     ParticipantSerializer,
     TagSerializer,
+    TicketSerializer,
     TournamentListSerializer,
     TournamentModelSerializer,
     VenueSerializer,
@@ -82,6 +87,10 @@ class ParticipantViewSet(viewsets.ModelViewSet):
 
     queryset = Participant.objects.select_related("tournament", "user").all()
     serializer_class = ParticipantSerializer
+    permission_classes = [IsAuthenticatedOrReadOnly]
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
 
 
 class TournamentViewSet(viewsets.ModelViewSet):
@@ -91,11 +100,16 @@ class TournamentViewSet(viewsets.ModelViewSet):
     """
 
     queryset = get_tournament_queryset()
+    permission_classes = [IsAuthenticatedOrReadOnly]
 
     def get_serializer_class(self):
         if self.action in ["list", "upcoming", "free_tournaments"]:
             return TournamentListSerializer
         return TournamentModelSerializer
+
+    def perform_create(self, serializer):
+        """Automatyczne przypisanie zalogowanego użytkownika jako organizatora."""
+        serializer.save(organizer=self.request.user)
 
     @action(detail=False, methods=["get"])
     def upcoming(self, request):
@@ -171,7 +185,7 @@ class TournamentViewSet(viewsets.ModelViewSet):
         new_tournament = Tournament.objects.create(
             name=f"{original.name} (Kopia)",
             slug=slug,
-            organizer=original.organizer,
+            organizer=request.user,
             venue=original.venue,
             description=original.description,
             start_date=original.start_date + timedelta(days=7),
@@ -259,3 +273,20 @@ class MatchViewSet(viewsets.ModelViewSet):
             serializer.save()
             return Response(serializer.data, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class TicketViewSet(viewsets.ModelViewSet):
+    """Endpoint biletów bieżącego użytkownika z izolacją danych (get_queryset)."""
+
+    serializer_class = TicketSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return Ticket.objects.filter(user=self.request.user).select_related(
+            "tournament",
+            "tournament__venue",
+            "user",
+        )
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)

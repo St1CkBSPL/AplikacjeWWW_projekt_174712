@@ -6,6 +6,7 @@ from .viewsets import (
     MatchViewSet,
     ParticipantViewSet,
     TagViewSet,
+    TicketViewSet,
     TournamentViewSet,
     VenueViewSet,
 )
@@ -18,6 +19,7 @@ router.register(r"tags", TagViewSet, basename="tag")
 router.register(r"tournaments", TournamentViewSet, basename="tournament")
 router.register(r"participants", ParticipantViewSet, basename="participant")
 router.register(r"matches", MatchViewSet, basename="match")
+router.register(r"tickets", TicketViewSet, basename="ticket")
 
 urlpatterns = [
     # 1. Tradycyjne widoki HTML (MVT)
@@ -46,5 +48,17 @@ urlpatterns = [
         "api/v1/summary/",
         cbv_views.TournamentPlatformSummaryAPIView.as_view(),
         name="platform-summary",
+    ),
+
+    # 4. Rejestracja i profil zalogowanego użytkownika (JWT)
+    path(
+        "api/register/",
+        cbv_views.UserRegisterView.as_view(),
+        name="api-register",
+    ),
+    path(
+        "api/me/",
+        cbv_views.CurrentUserProfileView.as_view(),
+        name="api-me",
     ),
 ]

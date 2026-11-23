@@ -1,10 +1,19 @@
 from decimal import Decimal
 
 from django.contrib.auth.models import User
+from django.contrib.auth.password_validation import validate_password
 from django.utils import timezone
 from rest_framework import serializers
 
-from .models import Match, Participant, Tag, Tournament, Venue
+from .models import (
+    Match,
+    OrganizerProfile,
+    Participant,
+    Tag,
+    Ticket,
+    Tournament,
+    Venue,
+)
 
 
 class TournamentSerializer(serializers.Serializer):
@@ -93,7 +102,7 @@ class ParticipantSerializer(serializers.ModelSerializer):
             "matches_played",
             "is_top_seed",
         ]
-        read_only_fields = ["id", "registered_at"]
+        read_only_fields = ["id", "user", "registered_at"]
 
     def get_matches_played(self, obj) -> int:
         return obj.home_matches.count() + obj.away_matches.count()
@@ -189,7 +198,7 @@ class TournamentModelSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "created_at", "updated_at"]
+        read_only_fields = ["id", "organizer", "created_at", "updated_at"]
 
     def get_is_free(self, obj) -> bool:
         return obj.entry_fee == 0
@@ -437,3 +446,165 @@ class MatchSerializer(serializers.ModelSerializer):
                 )
 
         return attrs
+
+
+class OrganizerProfileSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = OrganizerProfile
+        fields = ["company_name", "bio", "website", "is_verified"]
+        read_only_fields = ["is_verified"]
+
+
+class UserRegistrationSerializer(serializers.ModelSerializer):
+    password = serializers.CharField(
+        write_only=True,
+        required=True,
+        validators=[validate_password],
+        style={"input_type": "password"},
+    )
+    password_confirm = serializers.CharField(
+        write_only=True,
+        required=True,
+        style={"input_type": "password"},
+    )
+    company_name = serializers.CharField(
+        write_only=True,
+        required=False,
+        allow_blank=True,
+    )
+
+    class Meta:
+        model = User
+        fields = [
+            "id",
+            "username",
+            "email",
+            "first_name",
+            "last_name",
+            "password",
+            "password_confirm",
+            "company_name",
+        ]
+
+    def validate_email(self, value):
+        if value and User.objects.filter(email__iexact=value).exists():
+            raise serializers.ValidationError(
+                "Użytkownik z tym adresem e-mail już istnieje."
+            )
+        return value
+
+    def validate(self, attrs):
+        if attrs["password"] != attrs["password_confirm"]:
+            raise serializers.ValidationError(
+                {"password_confirm": "Podane hasła nie są identyczne."}
+            )
+        return attrs
+
+    def create(self, validated_data):
+        validated_data.pop("password_confirm")
+        company_name = validated_data.pop("company_name", "")
+
+        user = User.objects.create_user(
+            username=validated_data["username"],
+            email=validated_data.get("email", ""),
+            password=validated_data["password"],
+            first_name=validated_data.get("first_name", ""),
+            last_name=validated_data.get("last_name", ""),
+        )
+        OrganizerProfile.objects.create(user=user, company_name=company_name)
+        return user
+
+
+class CurrentUserSerializer(serializers.ModelSerializer):
+    profile = OrganizerProfileSerializer(required=False)
+
+    class Meta:
+        model = User
+        fields = [
+            "id",
+            "username",
+            "email",
+            "first_name",
+            "last_name",
+            "date_joined",
+            "profile",
+        ]
+        read_only_fields = ["id", "username", "date_joined"]
+
+    def validate_email(self, value):
+        if (
+            value
+            and User.objects.filter(email__iexact=value)
+            .exclude(pk=self.instance.pk)
+            .exists()
+        ):
+            raise serializers.ValidationError(
+                "Użytkownik z tym adresem e-mail już istnieje."
+            )
+        return value
+
+    def update(self, instance, validated_data):
+        profile_data = validated_data.pop("profile", None)
+
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+
+        if profile_data is not None:
+            profile, _ = OrganizerProfile.objects.get_or_create(user=instance)
+            for attr, value in profile_data.items():
+                setattr(profile, attr, value)
+            profile.save()
+
+        return instance
+
+
+class TicketSerializer(serializers.ModelSerializer):
+    tournament_name = serializers.ReadOnlyField(source="tournament.name")
+    tournament_start_date = serializers.ReadOnlyField(
+        source="tournament.start_date"
+    )
+    tournament_venue_name = serializers.ReadOnlyField(
+        source="tournament.venue.name"
+    )
+    user_username = serializers.ReadOnlyField(source="user.username")
+
+    class Meta:
+        model = Ticket
+        fields = [
+            "id",
+            "ticket_code",
+            "tournament",
+            "tournament_name",
+            "tournament_start_date",
+            "tournament_venue_name",
+            "user_username",
+            "status",
+            "purchased_at",
+        ]
+        read_only_fields = [
+            "id",
+            "ticket_code",
+            "status",
+            "purchased_at",
+            "user_username",
+        ]
+
+    def validate_tournament(self, tournament):
+        request = self.context.get("request")
+        if request and request.user.is_authenticated:
+            qs = Ticket.objects.filter(
+                tournament=tournament,
+                user=request.user,
+            )
+            if self.instance is not None:
+                qs = qs.exclude(pk=self.instance.pk)
+            if qs.exists():
+                raise serializers.ValidationError(
+                    "Posiadasz już bilet na ten turniej."
+                )
+        if not tournament.is_active:
+            raise serializers.ValidationError(
+                "Nie można kupić biletu na nieaktywny turniej."
+            )
+        return tournament

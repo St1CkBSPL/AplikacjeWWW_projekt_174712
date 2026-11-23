@@ -1,13 +1,24 @@
+from django.contrib.auth.models import User
 from django.db.models import Avg, Count, Max, Min, Q
 from django.utils import timezone
 from rest_framework import generics, status
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import Match, Participant, Tag, Tournament, Venue
+from .models import (
+    Match,
+    OrganizerProfile,
+    Participant,
+    Tag,
+    Tournament,
+    Venue,
+)
 from .serializers import (
+    CurrentUserSerializer,
     TournamentListSerializer,
     TournamentModelSerializer,
+    UserRegistrationSerializer,
 )
 
 
@@ -31,7 +42,7 @@ class TournamentListAPIView(APIView):
     def post(self, request):
         serializer = TournamentModelSerializer(data=request.data)
         if serializer.is_valid():
-            serializer.save()
+            serializer.save(organizer=request.user)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -49,6 +60,9 @@ class TournamentListCreateGenericView(generics.ListCreateAPIView):
         if self.request.method == "GET":
             return TournamentListSerializer
         return TournamentModelSerializer
+
+    def perform_create(self, serializer):
+        serializer.save(organizer=self.request.user)
 
 
 class TournamentRetrieveUpdateDestroyGenericView(
@@ -114,3 +128,22 @@ class TournamentPlatformSummaryAPIView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+class UserRegisterView(generics.CreateAPIView):
+    """Publiczny endpoint rejestracji nowych użytkowników."""
+
+    queryset = User.objects.all()
+    serializer_class = UserRegistrationSerializer
+    permission_classes = [AllowAny]
+
+
+class CurrentUserProfileView(generics.RetrieveUpdateAPIView):
+    """Odczyt i edycja profilu aktualnie zalogowanego użytkownika (/api/me/)."""
+
+    serializer_class = CurrentUserSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_object(self):
+        OrganizerProfile.objects.get_or_create(user=self.request.user)
+        return self.request.user
